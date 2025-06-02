@@ -11,6 +11,12 @@
 #define PIN_SCK  18
 #define PIN_MOSI 19
 
+typedef enum {
+    SPI_Motorola = 0,
+    SPI_TI = 1,
+    SPI_National = 2,
+} spi_frame_format_t;
+
 static inline void cs_select() {
     asm volatile("nop \n nop \n nop");
     gpio_put(PIN_CS, 0);  // Active low
@@ -33,12 +39,38 @@ static inline void spi_unreset(spi_inst_t *spi) {
     unreset_block_num_wait_blocking(spi == spi0 ? RESET_SPI0 : RESET_SPI1);
 }
 
-uint spi_init_with_bits(spi_inst_t *spi, uint baudrate, uint bits) {
+static inline void spi_set_format_frf(spi_inst_t *spi, uint data_bits, spi_cpol_t cpol, spi_cpha_t cpha, __unused spi_order_t order, spi_frame_format_t frf) {
+    invalid_params_if(HARDWARE_SPI, data_bits < 4 || data_bits > 16);
+    // LSB-first not supported on PL022:
+    invalid_params_if(HARDWARE_SPI, order != SPI_MSB_FIRST);
+    invalid_params_if(HARDWARE_SPI, cpol != SPI_CPOL_0 && cpol != SPI_CPOL_1);
+    invalid_params_if(HARDWARE_SPI, cpha != SPI_CPHA_0 && cpha != SPI_CPHA_1);
+    invalid_params_if(HARDWARE_SPI, frf != SPI_Motorola && frf != SPI_TI && frf != SPI_National);
+
+    // Disable the SPI
+    uint32_t enable_mask = spi_get_hw(spi)->cr1 & SPI_SSPCR1_SSE_BITS;
+    hw_clear_bits(&spi_get_hw(spi)->cr1, SPI_SSPCR1_SSE_BITS);
+
+    hw_write_masked(&spi_get_hw(spi)->cr0,
+                    ((uint)(data_bits - 1)) << SPI_SSPCR0_DSS_LSB |
+                    ((uint)frf) << SPI_SSPCR0_FRF_LSB |
+                    ((uint)cpol) << SPI_SSPCR0_SPO_LSB |
+                    ((uint)cpha) << SPI_SSPCR0_SPH_LSB,
+        SPI_SSPCR0_DSS_BITS |
+        SPI_SSPCR0_FRF_BITS |
+        SPI_SSPCR0_SPO_BITS |
+        SPI_SSPCR0_SPH_BITS);
+
+    // Re-enable the SPI
+    hw_set_bits(&spi_get_hw(spi)->cr1, enable_mask);
+}
+
+uint spi_init_with_bits_and_frf(spi_inst_t *spi, uint baudrate, uint bits, uint frf) {
     spi_reset(spi);
     spi_unreset(spi);
 
     uint baud = spi_set_baudrate(spi, baudrate);
-    spi_set_format(spi, bits, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+    spi_set_format_frf(spi, bits, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST, frf);
     // Always enable DREQ signals -- harmless if DMA is not listening
     hw_set_bits(&spi_get_hw(spi)->dmacr, SPI_SSPDMACR_TXDMAE_BITS | SPI_SSPDMACR_RXDMAE_BITS);
 
@@ -51,15 +83,12 @@ uint spi_init_with_bits(spi_inst_t *spi, uint baudrate, uint bits) {
 uint mcp3208_get_adc_single(uint ch)
 {
     uint result = 0;
-    uint16_t txbuf[2];
-    uint16_t rxbuf[2];
+    uint16_t txbuf[1];
+    uint16_t rxbuf[1];
 
-    txbuf[0] = ((ch & 7) << 4) | 0x180; // (1),Start(1)=1,SGL/DIF(1)=1,ch(3)=0~7,(4)
-    txbuf[1] = 0;
-    cs_select();
-    spi_write16_read16_blocking(SPI_PORT, txbuf, rxbuf, 2);
-    cs_deselect();
-    result = (rxbuf[0] << 10) + rxbuf[1];
+    txbuf[0] = ((ch & 7) << 2) | 0x60; // (1),Start(1)=1,SGL/DIF(1)=1,ch(3)=0~7,(2)
+    spi_write16_read16_blocking(SPI_PORT, txbuf, rxbuf, 1);
+    result = rxbuf[0];
 
     return result & 0xfff;
 }
@@ -71,18 +100,13 @@ int main()
     printf("Hello, MCP3208! Geting data via SPI...\n");
 
     // SPI initialisation. This example will use SPI at 1MHz.
-    spi_init_with_bits(SPI_PORT, 1000*1000, 10);
+    spi_init_with_bits_and_frf(SPI_PORT, 1000*1000, 12, SPI_National);
     gpio_set_function(PIN_MISO, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_CS,   GPIO_FUNC_SIO);
+    gpio_set_function(PIN_CS,   GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
 
     printf("SPI baudrate %dHz\n", spi_get_baudrate(SPI_PORT));
-
-    // Chip select is active-low, so we'll initialise it to a driven-high state
-    gpio_set_dir(PIN_CS, GPIO_OUT);
-    gpio_put(PIN_CS, 1);
-    // For more examples of SPI use see https://github.com/raspberrypi/pico-examples/tree/master/spi
 
     int ch = 0;
     while (true) {
