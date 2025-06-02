@@ -17,18 +17,6 @@ typedef enum {
     SPI_National = 2,
 } spi_frame_format_t;
 
-static inline void cs_select() {
-    asm volatile("nop \n nop \n nop");
-    gpio_put(PIN_CS, 0);  // Active low
-    asm volatile("nop \n nop \n nop");
-}
-
-static inline void cs_deselect() {
-    asm volatile("nop \n nop \n nop");
-    gpio_put(PIN_CS, 1);
-    asm volatile("nop \n nop \n nop");
-}
-
 static inline void spi_reset(spi_inst_t *spi) {
     invalid_params_if(HARDWARE_SPI, spi != spi0 && spi != spi1);
     reset_block_num(spi == spi0 ? RESET_SPI0 : RESET_SPI1);
