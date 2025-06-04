@@ -74,7 +74,7 @@ uint mcp3208_get_adc_single(uint ch)
     uint16_t txbuf[1];
     uint16_t rxbuf[1];
 
-    txbuf[0] = ((ch & 7) << 2) | 0x60; // (1),Start(1)=1,SGL/DIF(1)=1,ch(3)=0~7,(2)
+    txbuf[0] = ((ch & 7) << 1) | 0x30; // (2),Start(1)=1,SGL/DIF(1)=1,ch(3)=0~7,(1)
     spi_write16_read16_blocking(SPI_PORT, txbuf, rxbuf, 1);
     result = rxbuf[0];
 
